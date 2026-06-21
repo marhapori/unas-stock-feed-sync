@@ -3,6 +3,7 @@ import csv
 import io
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -33,6 +34,10 @@ REPORT_FIELDS = [
 ]
 BATCH_SIZE = 100
 DEFAULT_UNAS_API_BASE_URL = "https://api.unas.eu/shop"
+API_REQUEST_ATTEMPTS = 3
+API_CONNECT_TIMEOUT = 30
+API_READ_TIMEOUT = 60
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 
 class UnasApiError(Exception):
@@ -246,20 +251,38 @@ def post_xml(url: str, xml_string: str, headers: dict | None = None) -> str:
         request_headers.update(headers)
 
     if requests is not None:
-        try:
-            response = requests.post(
-                url,
-                data=xml_string.encode("utf-8"),
-                headers=request_headers,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise UnasApiError(f"Request failed: {exc}") from exc
+        for attempt in range(1, API_REQUEST_ATTEMPTS + 1):
+            try:
+                response = requests.post(
+                    url,
+                    data=xml_string.encode("utf-8"),
+                    headers=request_headers,
+                    timeout=(API_CONNECT_TIMEOUT, API_READ_TIMEOUT),
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                if attempt == API_REQUEST_ATTEMPTS:
+                    raise UnasApiError(
+                        f"Request failed after {attempt} attempts: {exc}"
+                    ) from exc
+                wait_before_retry(attempt, "network connection failed")
+                continue
+            except requests.RequestException as exc:
+                raise UnasApiError(f"Request failed: {exc}") from exc
 
-        if response.status_code >= 400:
-            raise UnasApiError(f"HTTP {response.status_code}: {response.text}")
-        response.encoding = "utf-8"
-        return response.text
+            if (
+                response.status_code in RETRYABLE_HTTP_STATUSES
+                and attempt < API_REQUEST_ATTEMPTS
+            ):
+                wait_before_retry(attempt, f"HTTP {response.status_code}")
+                continue
+
+            if response.status_code >= 400:
+                raise UnasApiError(
+                    f"HTTP {response.status_code}: {response.text[:500]}"
+                )
+
+            response.encoding = "utf-8"
+            return response.text
 
     request = urllib.request.Request(
         url,
@@ -267,12 +290,38 @@ def post_xml(url: str, xml_string: str, headers: dict | None = None) -> str:
         headers=request_headers,
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise UnasApiError(f"HTTP {exc.code}: {error_body}") from exc
+    for attempt in range(1, API_REQUEST_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(
+                request, timeout=API_CONNECT_TIMEOUT
+            ) as response:
+                return response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            if (
+                exc.code in RETRYABLE_HTTP_STATUSES
+                and attempt < API_REQUEST_ATTEMPTS
+            ):
+                wait_before_retry(attempt, f"HTTP {exc.code}")
+                continue
+            raise UnasApiError(f"HTTP {exc.code}: {error_body[:500]}") from exc
+        except urllib.error.URLError as exc:
+            if attempt == API_REQUEST_ATTEMPTS:
+                raise UnasApiError(
+                    f"Request failed after {attempt} attempts: {exc}"
+                ) from exc
+            wait_before_retry(attempt, "network connection failed")
+
+    raise UnasApiError("Request failed without a response.")
+
+
+def wait_before_retry(attempt: int, reason: str) -> None:
+    delay_seconds = 2**attempt
+    print(
+        f"UNAS request attempt {attempt}/{API_REQUEST_ATTEMPTS} failed "
+        f"({reason}); retrying in {delay_seconds} seconds."
+    )
+    time.sleep(delay_seconds)
 
 
 def unas_login(api_key: str, base_url: str) -> str:

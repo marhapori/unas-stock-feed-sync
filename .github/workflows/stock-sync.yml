@@ -38,6 +38,15 @@ jobs:
           CSV_URL: ${{ secrets.CSV_URL }}
         run: python stock_feed_sync.py --dry-run
 
+      - name: Check UNAS API connectivity
+        if: ${{ inputs.mode == 'live' }}
+        continue-on-error: true
+        run: |
+          curl --silent --show-error --output /dev/null \
+            --connect-timeout 20 --max-time 30 \
+            --write-out "UNAS connectivity HTTP %{http_code}\n" \
+            https://api.unas.eu/shop/login
+
       - name: Run stock feed live
         if: ${{ inputs.mode == 'live' }}
         env:
