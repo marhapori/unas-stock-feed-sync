@@ -37,10 +37,21 @@ CSV_SKU_COLUMN=sku
 CSV_STOCK_COLUMN=stock
 CSV_DELIMITER=,
 CSV_ENCODING=utf-8
+CSV_SKU_REMOVE_LEADING_ZERO=false
 REPORT_DIR=reports
 UNAS_API_KEY=
 UNAS_API_BASE_URL=https://api.unas.eu/shop
 ```
+
+Ha a CSV cikkszámai egy kezdő nullát tartalmaznak, de az UNAS cikkszámok nem,
+kapcsold be ezt az opciót:
+
+```env
+CSV_SKU_REMOVE_LEADING_ZERO=true
+```
+
+Ez pontosan egy kezdő nullát távolít el. A riport `sku` mezője megtartja az
+eredeti CSV értéket, az `unas_sku` mező pedig az UNAS-nak küldött értéket mutatja.
 
 ## Dry-run futtatás
 
@@ -145,22 +156,22 @@ A `0` készlet érvényes érték. A cikkszám és készlet mezők elejéről é
 ## Riport mezői
 
 ```csv
-row_number,sku,input_stock,status,message,unas_status,unas_error
+row_number,sku,unas_sku,input_stock,status,message,unas_status,unas_error
 ```
 
 Dry-run példa:
 
 ```csv
-row_number,sku,input_stock,status,message,unas_status,unas_error
-2,ABC-001,5,valid,ready_for_update,,
+row_number,sku,unas_sku,input_stock,status,message,unas_status,unas_error
+2,ABC-001,ABC-001,5,valid,ready_for_update,,
 ```
 
 Live példa:
 
 ```csv
-row_number,sku,input_stock,status,message,unas_status,unas_error
-2,ABC-001,5,updated,stock_updated,ok,
-3,ABC-999,3,error,unas_error,error,Product not found
+row_number,sku,unas_sku,input_stock,status,message,unas_status,unas_error
+2,ABC-001,ABC-001,5,updated,stock_updated,ok,
+3,ABC-999,ABC-999,3,error,unas_error,error,Product not found
 ```
 
 ## Biztonsági megjegyzés

@@ -36,6 +36,7 @@ jobs:
         if: ${{ inputs.mode == 'dry-run' }}
         env:
           CSV_URL: ${{ secrets.CSV_URL }}
+          CSV_SKU_REMOVE_LEADING_ZERO: "true"
         run: python stock_feed_sync.py --dry-run
 
       - name: Check UNAS API connectivity
@@ -51,6 +52,7 @@ jobs:
         if: ${{ inputs.mode == 'live' }}
         env:
           CSV_URL: ${{ secrets.CSV_URL }}
+          CSV_SKU_REMOVE_LEADING_ZERO: "true"
           UNAS_API_KEY: ${{ secrets.UNAS_API_KEY }}
           LIMIT: ${{ inputs.limit }}
         run: |

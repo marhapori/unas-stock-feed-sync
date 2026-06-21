@@ -26,6 +26,7 @@ except ImportError:
 REPORT_FIELDS = [
     "row_number",
     "sku",
+    "unas_sku",
     "input_stock",
     "status",
     "message",
@@ -57,6 +58,7 @@ class Config:
     dry_run: bool
     live: bool
     limit: int | None
+    remove_leading_sku_zero: bool
     unas_api_key: str | None
     unas_api_base_url: str
 
@@ -74,6 +76,12 @@ def read_config() -> Config:
     parser.add_argument("--delimiter", default=os.getenv("CSV_DELIMITER", ","))
     parser.add_argument("--encoding", default=os.getenv("CSV_ENCODING", "utf-8"))
     parser.add_argument("--report-dir", default=os.getenv("REPORT_DIR", "reports"))
+    parser.add_argument(
+        "--remove-leading-sku-zero",
+        action="store_true",
+        default=parse_bool(os.getenv("CSV_SKU_REMOVE_LEADING_ZERO", "false")),
+        help="Remove exactly one leading zero from SKU values before UNAS calls.",
+    )
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--dry-run",
@@ -116,6 +124,7 @@ def read_config() -> Config:
         dry_run=not args.live,
         live=args.live,
         limit=args.limit,
+        remove_leading_sku_zero=args.remove_leading_sku_zero,
         unas_api_key=unas_api_key,
         unas_api_base_url=os.getenv("UNAS_API_BASE_URL", DEFAULT_UNAS_API_BASE_URL),
     )
@@ -132,15 +141,35 @@ def download_csv(csv_url: str, encoding: str) -> str:
     return response.text
 
 
-def validate_row(row_number: int, sku_value: str, stock_value: str) -> dict:
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_sku(sku: str, remove_leading_zero: bool) -> str:
+    if remove_leading_zero and len(sku) > 1 and sku.startswith("0"):
+        return sku[1:]
+    return sku
+
+
+def validate_row(
+    row_number: int,
+    sku_value: str,
+    stock_value: str,
+    remove_leading_sku_zero: bool = False,
+) -> dict:
     sku = (sku_value or "").strip()
+    unas_sku = normalize_sku(sku, remove_leading_sku_zero)
     input_stock = (stock_value or "").strip()
 
     if not sku:
-        return build_report_row(row_number, sku, input_stock, "error", "missing_sku")
+        return build_report_row(
+            row_number, sku, input_stock, "error", "missing_sku", unas_sku
+        )
 
     if not input_stock:
-        return build_report_row(row_number, sku, input_stock, "error", "missing_stock")
+        return build_report_row(
+            row_number, sku, input_stock, "error", "missing_stock", unas_sku
+        )
 
     try:
         stock_number = int(input_stock)
@@ -148,24 +177,41 @@ def validate_row(row_number: int, sku_value: str, stock_value: str) -> dict:
         try:
             float(input_stock)
         except ValueError:
-            return build_report_row(row_number, sku, input_stock, "error", "invalid_stock")
+            return build_report_row(
+                row_number, sku, input_stock, "error", "invalid_stock", unas_sku
+            )
 
         return build_report_row(
-            row_number, sku, input_stock, "error", "decimal_stock_not_allowed"
+            row_number,
+            sku,
+            input_stock,
+            "error",
+            "decimal_stock_not_allowed",
+            unas_sku,
         )
 
     if stock_number < 0:
-        return build_report_row(row_number, sku, input_stock, "error", "negative_stock")
+        return build_report_row(
+            row_number, sku, input_stock, "error", "negative_stock", unas_sku
+        )
 
-    return build_report_row(row_number, sku, input_stock, "valid", "ready_for_update")
+    return build_report_row(
+        row_number, sku, input_stock, "valid", "ready_for_update", unas_sku
+    )
 
 
 def build_report_row(
-    row_number: int, sku: str, input_stock: str, status: str, message: str
+    row_number: int,
+    sku: str,
+    input_stock: str,
+    status: str,
+    message: str,
+    unas_sku: str | None = None,
 ) -> dict:
     return {
         "row_number": row_number,
         "sku": sku,
+        "unas_sku": unas_sku if unas_sku is not None else sku,
         "input_stock": input_stock,
         "status": status,
         "message": message,
@@ -175,11 +221,11 @@ def build_report_row(
 
 
 def check_duplicate_skus(report_rows: list[dict]) -> list[dict]:
-    sku_counts = Counter(row["sku"] for row in report_rows if row["sku"])
+    sku_counts = Counter(row["unas_sku"] for row in report_rows if row["unas_sku"])
     duplicate_skus = {sku for sku, count in sku_counts.items() if count > 1}
 
     for row in report_rows:
-        if row["sku"] in duplicate_skus:
+        if row["unas_sku"] in duplicate_skus:
             row["status"] = "error"
             row["message"] = "duplicate_sku"
 
@@ -213,6 +259,7 @@ def process_csv(csv_content: str, config: Config) -> list[dict]:
                 row_number=row_number,
                 sku_value=row.get(config.sku_column, ""),
                 stock_value=row.get(config.stock_column, ""),
+                remove_leading_sku_zero=config.remove_leading_sku_zero,
             )
         )
 
@@ -341,7 +388,7 @@ def build_set_stock_xml(valid_rows: list[dict]) -> str:
     for row in valid_rows:
         product = ET.SubElement(products, "Product")
         ET.SubElement(product, "Action").text = "modify"
-        ET.SubElement(product, "Sku").text = row["sku"]
+        ET.SubElement(product, "Sku").text = row["unas_sku"]
         stocks = ET.SubElement(product, "Stocks")
         stock = ET.SubElement(stocks, "Stock")
         ET.SubElement(stock, "Qty").text = str(int(row["input_stock"]))
@@ -428,7 +475,7 @@ def apply_unas_error_response(batch: list[dict], response_text: str) -> None:
 
     results_by_sku = {result["sku"]: result for result in parsed_results}
     for row in batch:
-        result = results_by_sku.get(row["sku"])
+        result = results_by_sku.get(row["unas_sku"])
         if result:
             apply_unas_result(row, result)
         else:
@@ -468,7 +515,7 @@ def run_live_updates(report_rows: list[dict], config: Config) -> None:
             results_by_sku = {result["sku"]: result for result in parsed_results}
 
             for row in batch:
-                result = results_by_sku.get(row["sku"])
+                result = results_by_sku.get(row["unas_sku"])
                 if result:
                     apply_unas_result(row, result)
                 else:
