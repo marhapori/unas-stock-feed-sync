@@ -1,0 +1,59 @@
+name: Stock feed dry-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "dry-run"
+        type: choice
+        options:
+          - dry-run
+          - live
+      limit:
+        description: "Limit number of valid rows to process in live mode"
+        required: false
+        default: "5"
+
+jobs:
+  stock-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run stock feed dry-run
+        if: ${{ inputs.mode == 'dry-run' }}
+        env:
+          CSV_URL: ${{ secrets.CSV_URL }}
+        run: python stock_feed_sync.py --dry-run
+
+      - name: Run stock feed live
+        if: ${{ inputs.mode == 'live' }}
+        env:
+          CSV_URL: ${{ secrets.CSV_URL }}
+          UNAS_API_KEY: ${{ secrets.UNAS_API_KEY }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          if [ -n "$LIMIT" ]; then
+            python stock_feed_sync.py --live --limit "$LIMIT"
+          else
+            python stock_feed_sync.py --live
+          fi
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-sync-report
+          path: reports/*.csv
+          if-no-files-found: error
