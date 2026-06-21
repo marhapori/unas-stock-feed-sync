@@ -477,7 +477,7 @@ def print_summary(report_rows: list[dict], report_path: Path, dry_run: bool) -> 
 def main() -> int:
     try:
         config = read_config()
-        print(f"Downloading CSV from: {config.csv_url}")
+        print("Downloading CSV feed.")
         csv_content = download_csv(config.csv_url, config.encoding)
         report_rows = process_csv(csv_content, config)
         if config.live:
@@ -501,7 +501,10 @@ def main() -> int:
         print(f"XML parse error: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
-        print(f"File error: {exc}", file=sys.stderr)
+        if requests is not None and isinstance(exc, requests.RequestException):
+            print(f"CSV download failed: {exc}", file=sys.stderr)
+        else:
+            print(f"File error: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         if requests is not None and isinstance(exc, requests.RequestException):
