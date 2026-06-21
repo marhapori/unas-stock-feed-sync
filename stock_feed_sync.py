@@ -58,6 +58,7 @@ class Config:
     dry_run: bool
     live: bool
     limit: int | None
+    only_sku: str | None
     remove_leading_sku_zero: bool
     unas_api_key: str | None
     unas_api_base_url: str
@@ -99,6 +100,11 @@ def read_config() -> Config:
         default=None,
         help="Maximum number of valid rows to send in live mode.",
     )
+    parser.add_argument(
+        "--only-sku",
+        default=None,
+        help="Send only this SKU in live mode, after configured normalization.",
+    )
     args = parser.parse_args()
 
     if not args.csv_url:
@@ -124,6 +130,7 @@ def read_config() -> Config:
         dry_run=not args.live,
         live=args.live,
         limit=args.limit,
+        only_sku=args.only_sku,
         remove_leading_sku_zero=args.remove_leading_sku_zero,
         unas_api_key=unas_api_key,
         unas_api_base_url=os.getenv("UNAS_API_BASE_URL", DEFAULT_UNAS_API_BASE_URL),
@@ -486,6 +493,18 @@ def apply_unas_error_response(batch: list[dict], response_text: str) -> None:
 
 def run_live_updates(report_rows: list[dict], config: Config) -> None:
     valid_rows = [row for row in report_rows if row["status"] == "valid"]
+
+    if config.only_sku:
+        target_sku = normalize_sku(
+            config.only_sku.strip(), config.remove_leading_sku_zero
+        )
+        valid_rows = [row for row in valid_rows if row["unas_sku"] == target_sku]
+        if not valid_rows:
+            raise ValueError(
+                f"Requested SKU was not found among valid feed rows: {target_sku}"
+            )
+        print(f"Live SKU filter: {target_sku}")
+
     rows_to_send = valid_rows[: config.limit] if config.limit else valid_rows
 
     if not rows_to_send:

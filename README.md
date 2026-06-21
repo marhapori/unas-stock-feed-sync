@@ -93,6 +93,16 @@ További limitált futás:
 python stock_feed_sync.py --live --limit 10
 ```
 
+Egy konkrét SKU biztonságos célzásához:
+
+```bash
+python stock_feed_sync.py --live --only-sku "9506005" --limit 1
+```
+
+Az `--only-sku` értékre ugyanaz az SKU-normalizálás vonatkozik, mint a feed
+soraira. Ha a megadott SKU nem található a valid sorok között, a script küldés
+nélkül leáll.
+
 Ha `--live` van, de nincs `--limit`, a script lefut, de erős figyelmeztetést ír ki, mert minden valid sort elküld.
 
 ## UNAS API kulcs
