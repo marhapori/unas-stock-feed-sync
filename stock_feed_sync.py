@@ -41,7 +41,9 @@ RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 
 class UnasApiError(Exception):
-    pass
+    def __init__(self, message: str, response_text: str = "") -> None:
+        super().__init__(message)
+        self.response_text = response_text
 
 
 @dataclass
@@ -278,7 +280,7 @@ def post_xml(url: str, xml_string: str, headers: dict | None = None) -> str:
 
             if response.status_code >= 400:
                 raise UnasApiError(
-                    f"HTTP {response.status_code}: {response.text[:500]}"
+                    f"HTTP {response.status_code}", response.text
                 )
 
             response.encoding = "utf-8"
@@ -304,7 +306,7 @@ def post_xml(url: str, xml_string: str, headers: dict | None = None) -> str:
             ):
                 wait_before_retry(attempt, f"HTTP {exc.code}")
                 continue
-            raise UnasApiError(f"HTTP {exc.code}: {error_body[:500]}") from exc
+            raise UnasApiError(f"HTTP {exc.code}", error_body) from exc
         except urllib.error.URLError as exc:
             if attempt == API_REQUEST_ATTEMPTS:
                 raise UnasApiError(
@@ -417,6 +419,24 @@ def mark_batch_http_error(batch: list[dict], error_message: str) -> None:
         row["unas_error"] = error_message
 
 
+def apply_unas_error_response(batch: list[dict], response_text: str) -> None:
+    try:
+        parsed_results = parse_set_stock_response(response_text)
+    except ET.ParseError:
+        mark_batch_http_error(batch, response_text[:500])
+        return
+
+    results_by_sku = {result["sku"]: result for result in parsed_results}
+    for row in batch:
+        result = results_by_sku.get(row["sku"])
+        if result:
+            apply_unas_result(row, result)
+        else:
+            mark_batch_http_error(
+                [row], "UNAS rejected the batch before returning this SKU result."
+            )
+
+
 def run_live_updates(report_rows: list[dict], config: Config) -> None:
     valid_rows = [row for row in report_rows if row["status"] == "valid"]
     rows_to_send = valid_rows[: config.limit] if config.limit else valid_rows
@@ -455,7 +475,12 @@ def run_live_updates(report_rows: list[dict], config: Config) -> None:
                     mark_batch_http_error(
                         [row], "No product result returned by UNAS for this SKU."
                     )
-        except (UnasApiError, ET.ParseError, urllib.error.URLError) as exc:
+        except UnasApiError as exc:
+            if exc.response_text:
+                apply_unas_error_response(batch, exc.response_text)
+            else:
+                mark_batch_http_error(batch, str(exc))
+        except (ET.ParseError, urllib.error.URLError) as exc:
             mark_batch_http_error(batch, str(exc))
 
 
@@ -484,7 +509,10 @@ def main() -> int:
             run_live_updates(report_rows, config)
         report_path = save_report(report_rows, config.report_dir)
         print_summary(report_rows, report_path, config.dry_run)
-        return 0
+        live_api_errors = any(
+            row["unas_status"] == "error" for row in report_rows
+        )
+        return 1 if config.live and live_api_errors else 0
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
