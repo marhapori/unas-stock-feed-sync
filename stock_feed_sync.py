@@ -34,6 +34,8 @@ REPORT_FIELDS = [
     "unas_error",
 ]
 BATCH_SIZE = 100
+GET_PRODUCT_PAGE_SIZE = 500
+MAX_GET_PRODUCT_PAGES = 100
 DEFAULT_UNAS_API_BASE_URL = "https://api.unas.eu/shop"
 API_REQUEST_ATTEMPTS = 3
 API_CONNECT_TIMEOUT = 30
@@ -403,6 +405,41 @@ def build_set_stock_xml(valid_rows: list[dict]) -> str:
     return xml_to_string(products)
 
 
+def build_get_products_xml(limit_start: int, limit_num: int) -> str:
+    params = ET.Element("Params")
+    ET.SubElement(params, "LimitStart").text = str(limit_start)
+    ET.SubElement(params, "LimitNum").text = str(limit_num)
+    return xml_to_string(params)
+
+
+def get_unas_skus(
+    token: str, base_url: str, page_size: int = GET_PRODUCT_PAGE_SIZE
+) -> set[str]:
+    unas_skus = set()
+
+    for page_number in range(MAX_GET_PRODUCT_PAGES):
+        limit_start = page_number * page_size
+        response_text = post_xml(
+            f"{base_url.rstrip('/')}/getProduct",
+            build_get_products_xml(limit_start, page_size),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        root = ET.fromstring(response_text)
+        products = find_elements(root, "Product")
+
+        for product in products:
+            sku = find_first_text(product, "Sku")
+            if sku:
+                unas_skus.add(sku)
+
+        if len(products) < page_size:
+            return unas_skus
+
+    raise UnasApiError(
+        f"getProduct exceeded the safety limit of {MAX_GET_PRODUCT_PAGES} pages."
+    )
+
+
 def send_set_stock(xml_string: str, token: str, base_url: str) -> str:
     return post_xml(
         f"{base_url.rstrip('/')}/setStock",
@@ -473,6 +510,19 @@ def mark_batch_http_error(batch: list[dict], error_message: str) -> None:
         row["unas_error"] = error_message
 
 
+def mark_missing_in_unas(rows: list[dict], existing_skus: set[str]) -> list[dict]:
+    existing_rows = []
+    for row in rows:
+        if row["unas_sku"] in existing_skus:
+            existing_rows.append(row)
+        else:
+            row["status"] = "skipped"
+            row["message"] = "missing_in_unas"
+            row["unas_status"] = "skipped"
+            row["unas_error"] = ""
+    return existing_rows
+
+
 def apply_unas_error_response(batch: list[dict], response_text: str) -> None:
     try:
         parsed_results = parse_set_stock_response(response_text)
@@ -505,10 +555,21 @@ def run_live_updates(report_rows: list[dict], config: Config) -> None:
             )
         print(f"Live SKU filter: {target_sku}")
 
-    rows_to_send = valid_rows[: config.limit] if config.limit else valid_rows
+    print("Logging in to UNAS API.")
+    token = unas_login(config.unas_api_key or "", config.unas_api_base_url)
+    print("UNAS login succeeded.")
+
+    print("Loading existing SKUs from UNAS.")
+    existing_skus = get_unas_skus(token, config.unas_api_base_url)
+    print(f"Loaded {len(existing_skus)} existing UNAS SKU(s).")
+    existing_rows = mark_missing_in_unas(valid_rows, existing_skus)
+    skipped_count = len(valid_rows) - len(existing_rows)
+    print(f"Skipped {skipped_count} feed row(s) missing from UNAS.")
+
+    rows_to_send = existing_rows[: config.limit] if config.limit else existing_rows
 
     if not rows_to_send:
-        print("No valid rows to send to UNAS.")
+        print("No existing valid rows to send to UNAS.")
         return
 
     if config.limit:
@@ -516,12 +577,8 @@ def run_live_updates(report_rows: list[dict], config: Config) -> None:
     else:
         print(
             "WARNING: live mode is running without --limit. "
-            f"All {len(rows_to_send)} valid row(s) will be sent."
+            f"All {len(rows_to_send)} existing valid row(s) will be sent."
         )
-
-    print("Logging in to UNAS API.")
-    token = unas_login(config.unas_api_key or "", config.unas_api_base_url)
-    print("UNAS login succeeded.")
 
     for batch_number, batch in enumerate(chunk_rows(rows_to_send, BATCH_SIZE), start=1):
         print(f"Sending batch {batch_number} with {len(batch)} product(s).")
@@ -553,6 +610,7 @@ def run_live_updates(report_rows: list[dict], config: Config) -> None:
 def print_summary(report_rows: list[dict], report_path: Path, dry_run: bool) -> None:
     valid_count = sum(1 for row in report_rows if row["status"] == "valid")
     updated_count = sum(1 for row in report_rows if row["status"] == "updated")
+    skipped_count = sum(1 for row in report_rows if row["status"] == "skipped")
     error_count = sum(1 for row in report_rows if row["status"] == "error")
     mode = "dry-run" if dry_run else "live"
 
@@ -561,6 +619,7 @@ def print_summary(report_rows: list[dict], report_path: Path, dry_run: bool) -> 
     print(f"Rows checked: {len(report_rows)}")
     print(f"Valid rows: {valid_count}")
     print(f"Updated rows: {updated_count}")
+    print(f"Skipped rows: {skipped_count}")
     print(f"Error rows: {error_count}")
     print(f"Report saved: {report_path}")
 

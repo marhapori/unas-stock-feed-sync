@@ -111,7 +111,13 @@ Az UNAS admin felületen hozz létre API kulcsot az API beállításoknál.
 A kulcsnak legalább ezekhez a műveletekhez kell jogosultság:
 
 - login
+- getProduct
 - setStock
+
+Live futáskor a script előbb lapozva lekéri az UNAS terméklistát a `getProduct`
+végponton. Csak az ott megtalált SKU-k kerülnek a `setStock` kérésbe. A feedben
+szereplő, de UNAS-ban nem létező cikkszámok `skipped` / `missing_in_unas`
+státuszt kapnak, így nem okoznak sorozatos API-hibát.
 
 Az API kulcsot ne írd kódba és ne commitold. Lokálisan `.env` fájlban add meg:
 
