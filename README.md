@@ -153,6 +153,8 @@ Indítás:
    - `dry-run`: csak validálás és riport
    - `live`: UNAS készletfrissítés
 5. Live módnál hagyd meg vagy állítsd be a `limit` értéket.
+6. Egyetlen termék teszteléséhez add meg az `only_sku` mezőt is, például
+   `9506005` értékkel, és állítsd a `limit` mezőt `1`-re.
 
 A futás után a riport a workflow artifactjai között letölthető.
 
