@@ -158,6 +158,46 @@ Indítás:
 
 A futás után a riport a workflow artifactjai között letölthető.
 
+## Railway Cron Job
+
+Railway alatt Cron Job szolgáltatást használj, ne Web Service-t. A projekt tartalmaz
+egy `railpack.json` fájlt, amely explicit start commandot ad a Railpack buildhez.
+Az alapértelmezett parancs biztonságosan dry-run:
+
+```bash
+python stock_feed_sync.py --dry-run
+```
+
+Railway változók:
+
+```env
+CSV_URL=
+CSV_SKU_COLUMN=sku
+CSV_STOCK_COLUMN=stock
+CSV_DELIMITER=,
+CSV_ENCODING=utf-8
+CSV_SKU_REMOVE_LEADING_ZERO=true
+REPORT_DIR=reports
+UNAS_API_KEY=
+UNAS_API_BASE_URL=https://api.unas.eu/shop
+```
+
+Első Railway futásnál maradjon dry-run. Célzott live teszthez a Railway start
+command legyen:
+
+```bash
+python stock_feed_sync.py --live --only-sku 9506005 --limit 1
+```
+
+Limitált éles futáshoz:
+
+```bash
+python stock_feed_sync.py --live --limit 20
+```
+
+Railway cron időzítés UTC alapú. A cron service-nek a feladat végén ki kell
+lépnie; ez a script ilyen működésű.
+
 ## Validációs szabályok
 
 Hibás sor lesz, ha:
